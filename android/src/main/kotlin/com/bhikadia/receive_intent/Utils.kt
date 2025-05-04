@@ -7,13 +7,14 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Parcelable
-// import android.util.Log
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.ArrayList
 
+private const val TAG = "ReceiveIntentUtils"
 
 fun jsonToBundle(json: JSONObject): Bundle {
     val bundle = Bundle()
@@ -21,29 +22,29 @@ fun jsonToBundle(json: JSONObject): Bundle {
         val iterator: Iterator<String> = json.keys()
         while (iterator.hasNext()) {
             val key = iterator.next()
-            val value: Any = json.get(key)
-            when (value.javaClass.getSimpleName()) {
-                "String" -> bundle.putString(key, value as String)
-                "Integer" -> bundle.putInt(key, value as Int)
-                "Long" -> bundle.putLong(key, value as Long)
-                "Boolean" -> bundle.putBoolean(key, value as Boolean)
-                "JSONObject" -> bundle.putBundle(key, jsonToBundle(value as JSONObject))
-                "Float" -> bundle.putFloat(key, value as Float)
-                "Double" -> bundle.putDouble(key, value as Double)
-                else -> bundle.putString(key, value.toString())
+            if (!json.isNull(key)) {
+                val value: Any = json.get(key)
+                when (value) {
+                    is String -> bundle.putString(key, value)
+                    is Int -> bundle.putInt(key, value)
+                    is Long -> bundle.putLong(key, value)
+                    is Boolean -> bundle.putBoolean(key, value)
+                    is JSONObject -> bundle.putBundle(key, jsonToBundle(value))
+                    is Float -> bundle.putFloat(key, value)
+                    is Double -> bundle.putDouble(key, value)
+                    else -> bundle.putString(key, value.toString())
+                }
             }
         }
     } catch (e: JSONException) {
-        e.printStackTrace()
+        Log.e(TAG, "Error converting JSON to Bundle", e)
     }
     return bundle
-
 }
 
 fun jsonToIntent(json: JSONObject): Intent = Intent().apply {
     putExtras(jsonToBundle(json))
 }
-
 
 fun bundleToJSON(bundle: Bundle): JSONObject {
     val json = JSONObject()
@@ -52,10 +53,15 @@ fun bundleToJSON(bundle: Bundle): JSONObject {
     while (iterator.hasNext()) {
         val key = iterator.next()
         try {
-            // Log.e("ReceiveIntentPlugin wrapping key", "$key")
-            json.put(key, wrap(bundle.get(key)))
-        } catch (e: JSONException) {
-            e.printStackTrace()
+            val value = bundle.get(key)
+            if (value != null) {
+                Log.d(TAG, "Converting bundle key to JSON: $key")
+                json.put(key, wrap(value))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error converting bundle key to JSON: $key", e)
+            // Put a placeholder for the error to maintain key presence
+            json.put(key, "Error: ${e.message}")
         }
     }
     return json
@@ -63,119 +69,155 @@ fun bundleToJSON(bundle: Bundle): JSONObject {
 
 fun wrap(o: Any?): Any? {
     if (o == null) {
-        // Log.e("ReceiveIntentPlugin", "$o is null")
         return JSONObject.NULL
     }
     if (o is JSONArray || o is JSONObject) {
-        // Log.e("ReceiveIntentPlugin", "$o is JSONArray or JSONObject")
         return o
     }
     if (o == JSONObject.NULL) {
-        // Log.e("ReceiveIntentPlugin", "$o is JSONObject.NULL")
         return o
     }
+
     try {
-        if (o is Collection<*>) {
-            // Log.e("ReceiveIntentPlugin", "$o is Collection<*>")
-            if (o is ArrayList<*>) {
-                // Log.e("ReceiveIntentPlugin", "..And also ArrayList")
-                return toJSONArray(o)
+        when (o) {
+            is Collection<*> -> return toJSONArray(o)
+            is Map<*, *> -> return JSONObject(o as Map<*, *>?)
+            is Boolean, is Byte, is Char, is Double, is Float, 
+            is Int, is Long, is Short, is String -> return o
+            is Parcelable -> {
+                // Improved handling for Parcelable objects - just return type info
+                Log.d(TAG, "Converting Parcelable: ${o.javaClass.simpleName}")
+                return "Parcelable:${o.javaClass.name}"
             }
-            return JSONArray(o as Collection<*>?)
-        } else if (o.javaClass.isArray) {
-            // Log.e("ReceiveIntentPlugin", "$o is isArray")
-            return toJSONArray(o)
-        }
-        if (o is Map<*, *>) {
-            // Log.e("ReceiveIntentPlugin", "$o is Map<*, *>")
-            return JSONObject(o as Map<*, *>?)
-        }
-        if (o is Boolean ||
-                o is Byte ||
-                o is Char ||
-                o is Double ||
-                o is Float ||
-                o is Int ||
-                o is Long ||
-                o is Short ||
-                o is String) {
-            return o
-        }
-        if (o is Uri || o.javaClass.getPackage().name.startsWith("java.")) {
-            return o.toString()
+            else -> {
+                // Handle array types
+                if (o.javaClass.isArray) {
+                    return toJSONArray(o)
+                }
+
+                // Handle Uri and Java objects
+                if (o is Uri || o.javaClass.getPackage()?.name?.startsWith("java.") == true) {
+                    return o.toString()
+                }
+
+                // Default fallback
+                return o.toString()
+            }
         }
     } catch (e: Exception) {
-        // Log.e("ReceiveIntentPlugin", e.message, e)
+        Log.e(TAG, "Error wrapping object: ${o?.javaClass?.simpleName}", e)
+        return "Error wrapping: ${e.message}"
     }
-    return null
 }
 
 @Throws(JSONException::class)
-fun toJSONArray(array: Any): JSONArray? {
+fun toJSONArray(array: Any): JSONArray {
     val result = JSONArray()
-    if (!array.javaClass.isArray && array !is ArrayList<*>) {
-        // Log.e("ReceiveIntentPlugin not a primitive array", "")
-        throw JSONException("Not a primitive array: " + array.javaClass)
-    }
 
-    when (array) {
-        is List<*> -> {
-            // Log.e("ReceiveIntentPlugin toJSONArray List", "")
-            // Log.e("ReceiveIntentPlugin toJSONArray List size", "${array.size}")
-            array.forEach { result.put(wrap(it)) }
-        }
-        is Array<*> -> {
-            // Log.e("ReceiveIntentPlugin toJSONArray Array", "")
-            // Log.e("ReceiveIntentPlugin toJSONArray Array size", "${array.size}")
-            array.forEach { result.put(wrap(it)) }
-        }
-        is ArrayList<*> -> {
-            // Log.e("ReceiveIntentPlugin toJSONArray ArrayList", "")
-            array.forEach { result.put(wrap(it)) }
-        }
-        is ByteArray -> {
-            // Log.e("ReceiveIntentPlugin toJSONArray ByteArray", "")
-            array.forEach { result.put(wrap(it)) }
-        }
-        else -> {
-            // val typename = array.javaClass.kotlin.simpleName
-            // Log.e("ReceiveIntentPlugin toJSONArray else", "$typename")
-            val length = java.lang.reflect.Array.getLength(array)
-            for (i in 0 until length) {
-                result.put(wrap(java.lang.reflect.Array.get(array, i)))
+    try {
+        when (array) {
+            is List<*> -> {
+                for (item in array) {
+                    result.put(wrap(item))
+                }
+            }
+            is Array<*> -> {
+                for (item in array) {
+                    result.put(wrap(item))
+                }
+            }
+            is ByteArray -> {
+                for (item in array) {
+                    result.put(item)
+                }
+            }
+            is IntArray -> {
+                for (item in array) {
+                    result.put(item)
+                }
+            }
+            is LongArray -> {
+                for (item in array) {
+                    result.put(item)
+                }
+            }
+            is FloatArray -> {
+                for (item in array) {
+                    result.put(item)
+                }
+            }
+            is DoubleArray -> {
+                for (item in array) {
+                    result.put(item)
+                }
+            }
+            is BooleanArray -> {
+                for (item in array) {
+                    result.put(item)
+                }
+            }
+            is CharArray -> {
+                for (item in array) {
+                    result.put(item)
+                }
+            }
+            is ShortArray -> {
+                for (item in array) {
+                    result.put(item)
+                }
+            }
+            else -> {
+                // Use safer reflective approach
+                try {
+                    Log.w(TAG, "Using reflection for array of type: ${array.javaClass.simpleName}")
+                    val length = java.lang.reflect.Array.getLength(array)
+                    for (i in 0 until length) {
+                        result.put(wrap(java.lang.reflect.Array.get(array, i)))
+                    }
+                } catch (reflectionException: Exception) {
+                    Log.e(TAG, "Reflection failed for array type: ${array.javaClass.simpleName}", reflectionException)
+                    result.put("Error: Unsupported array type ${array.javaClass.simpleName}")
+                }
             }
         }
+    } catch (e: Exception) {
+        Log.e(TAG, "Error converting to JSONArray: ${array.javaClass.simpleName}", e)
+        throw JSONException("Error converting to JSONArray: ${e.message}")
     }
-
-    // Log.e("ReceiveIntentPlugin toJSONArray result", "$result")
 
     return result
 }
 
 fun getApplicationSignature(context: Context, packageName: String): List<String> {
-    val signatureList: List<String>
     try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            // New signature
-            val sig = context.packageManager.getPackageInfo(packageName, PackageManager.GET_SIGNING_CERTIFICATES).signingInfo
-            signatureList = if (sig.hasMultipleSigners()) {
-                // Send all with apkContentsSigners
-                sig.apkContentsSigners.map {
-                    val digest = MessageDigest.getInstance("SHA-256")
-                    digest.update(it.toByteArray())
-                    bytesToHex(digest.digest())
-                }
+        val signatureList: List<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            // New signature API for Android P (28) and above
+            val packageInfo = context.packageManager.getPackageInfo(
+                packageName, 
+                PackageManager.GET_SIGNING_CERTIFICATES
+            )
+
+            val signingInfo = packageInfo.signingInfo
+            val signers = if (signingInfo.hasMultipleSigners()) {
+                signingInfo.apkContentsSigners
             } else {
-                // Send one with signingCertificateHistory
-                sig.signingCertificateHistory.map {
-                    val digest = MessageDigest.getInstance("SHA-256")
-                    digest.update(it.toByteArray())
-                    bytesToHex(digest.digest())
-                }
+                signingInfo.signingCertificateHistory
+            }
+
+            signers.map {
+                val digest = MessageDigest.getInstance("SHA-256")
+                digest.update(it.toByteArray())
+                bytesToHex(digest.digest())
             }
         } else {
-            val sig = context.packageManager.getPackageInfo(packageName, PackageManager.GET_SIGNATURES).signatures
-            signatureList = sig.map {
+            // Legacy signature API for below Android P
+            @Suppress("DEPRECATION")
+            val signatures = context.packageManager.getPackageInfo(
+                packageName, 
+                PackageManager.GET_SIGNATURES
+            ).signatures
+
+            signatures.map {
                 val digest = MessageDigest.getInstance("SHA-256")
                 digest.update(it.toByteArray())
                 bytesToHex(digest.digest())
@@ -184,17 +226,16 @@ fun getApplicationSignature(context: Context, packageName: String): List<String>
 
         return signatureList
     } catch (e: Exception) {
-        // Handle error
+        Log.e(TAG, "Error getting application signature for $packageName", e)
+        return emptyList()
     }
-    return emptyList()
 }
 
 fun bytesToHex(bytes: ByteArray): String {
     val hexArray = charArrayOf('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F')
     val hexChars = CharArray(bytes.size * 2)
-    var v: Int
     for (j in bytes.indices) {
-        v = bytes[j].toInt() and 0xFF
+        val v = bytes[j].toInt() and 0xFF
         hexChars[j * 2] = hexArray[v.ushr(4)]
         hexChars[j * 2 + 1] = hexArray[v and 0x0F]
     }
